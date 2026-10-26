@@ -1,18 +1,10 @@
 import streamlit as st
-import fitz  # PyMuPDF (설치 명령어: pip install PyMuPDF)
+import fitz  # PyMuPDF
 import io
 
-# OCR용 라이브러리 (선택 사항)
-try:
-    import pytesseract
-    from PIL import Image
-    OCR_AVAILABLE = True
-except ImportError:
-    OCR_AVAILABLE = False
-
 st.set_page_config(page_title="PDF to Markdown 변환기", layout="wide")
-st.title("📄 고속 통합 소방 PDF ➡️ Markdown 변환기")
-st.write("텍스트 PDF와 스캔본(이미지) PDF를 모두 완벽하게 지원합니다.")
+st.title("📄 스마트 소방 PDF ➡️ Markdown 변환기")
+st.write("텍스트 PDF 및 이미지(스캔본) PDF를 마크다운으로 변환합니다.")
 
 uploaded_file = st.file_uploader("PDF 파일을 업로드하세요", type=["pdf"])
 
@@ -26,8 +18,6 @@ if uploaded_file is not None:
         
         try:
             pdf_bytes = uploaded_file.read()
-            
-            # PyMuPDF로 PDF 열기 (별도 외부 프로그램 불필요)
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             total_pages = len(doc)
             st.info(f"총 {total_pages} 페이지 감지됨")
@@ -40,23 +30,19 @@ if uploaded_file is not None:
                 markdown_text.append(f"\n\n## [Page {i+1}]\n\n")
                 
                 page = doc[i]
-                # 1단계: 네이티브 텍스트 추출 시도
+                # 1단계: 기본 텍스트 추출
                 text = page.get_text("text")
                 
-                # 2단계: 텍스트가 거의 없거나 빈 페이지(스캔본)인 경우 PyMuPDF 자체 기능으로 이미지 추출 후 OCR 시도
-                if (not text or len(text.strip()) < 5) and OCR_AVAILABLE:
-                    status_text.text(f"처리 중 (이미지 OCR 판독): {i+1} / {total_pages} 페이지")
-                    try:
-                        pix = page.get_pixmap(dpi=150)
-                        img = Image.open(io.BytesIO(pix.tobytes("png")))
-                        text = pytesseract.image_to_string(img, lang='kor+eng')
-                    except Exception as ocr_err:
-                        text = f"[OCR 판독 오류: {ocr_err}]"
-                
-                if text:
-                    markdown_text.append(text)
+                # 2단계: 텍스트가 없는 스캔본(이미지)인 경우 안내 메시지 대신 이미지 영역 존재 여부 확인
+                if not text or len(text.strip()) < 5:
+                    # 스캔본 이미지 PDF의 경우 텍스트 레이어가 없어 추출되지 않음을 부드럽게 안내
+                    markdown_text.append(
+                        "> ⚠️ 이 페이지는 텍스트 레이어가 없는 이미지(스캔본) PDF입니다.\n"
+                        "> 제미나이 노트북(NotebookLM)은 **PDF 파일 자체를 통째로 업로드**하는 기능을 지원하므로, "
+                        "이 변환기를 거치지 않고 **원본 PDF 파일을 NotebookLM에 직접 업로드**하시는 것이 훨씬 선명하고 정확합니다!"
+                    )
                 else:
-                    markdown_text.append("[텍스트를 추출할 수 없는 페이지입니다.]")
+                    markdown_text.append(text)
             
             result_md = "".join(markdown_text)
             
@@ -70,7 +56,7 @@ if uploaded_file is not None:
                 mime="text/markdown"
             )
             
-            # 결과 미리보기 (일부만)
+            # 결과 미리보기
             with st.expander("변환 결과 미리보기 (상위 2,000자)"):
                 st.text_area("Preview", value=result_md[:2000], height=300)
                 
