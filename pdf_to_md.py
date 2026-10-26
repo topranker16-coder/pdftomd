@@ -1,23 +1,18 @@
 import streamlit as st
-import pdfplumber
+import fitz  # PyMuPDF (설치 명령어: pip install PyMuPDF)
 import io
-from PIL import Image
 
-# OCR 기능용 라이브러리 예외 처리 (설치되어 있지 않아도 앱이 꺼지지 않도록 방어 코드 추가)
+# OCR용 라이브러리 (선택 사항)
 try:
-    from pdf2image import convert_from_bytes
     import pytesseract
+    from PIL import Image
     OCR_AVAILABLE = True
 except ImportError:
     OCR_AVAILABLE = False
 
-st.set_page_config(page_title="통합 PDF to Markdown 변환기", layout="wide")
-
-st.title("📄 텍스트/스캔 통합 소방 PDF ➡️ Markdown 변환기")
-st.write("드래그 가능한 일반 PDF와 통 이미지(스캔본) PDF를 모두 지원합니다.")
-
-if not OCR_AVAILABLE:
-    st.info("💡 안내: 이미지(스캔본) PDF까지 완벽하게 읽으려면 환경에 `pdf2image`와 `pytesseract`(Tesseract-OCR 엔진)가 설치되어 있어야 합니다. 현재는 텍스트 추출 위주로 동작합니다.")
+st.set_page_config(page_title="PDF to Markdown 변환기", layout="wide")
+st.title("📄 고속 통합 소방 PDF ➡️ Markdown 변환기")
+st.write("텍스트 PDF와 스캔본(이미지) PDF를 모두 완벽하게 지원합니다.")
 
 uploaded_file = st.file_uploader("PDF 파일을 업로드하세요", type=["pdf"])
 
@@ -32,52 +27,36 @@ if uploaded_file is not None:
         try:
             pdf_bytes = uploaded_file.read()
             
-            # 1. pdf2image를 이용해 미리 전체 페이지를 이미지로 변환 준비 (OCR 대비)
-            images = None
-            if OCR_AVAILABLE:
-                try:
-                    images = convert_from_bytes(pdf_bytes)
-                except Exception:
-                    pass # poppler 미설치 등의 이유로 실패해도 텍스트 추출은 진행되도록 예외 처리
-
-            # 2. pdfplumber로 텍스트 및 표 추출 시작
-            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-                total_pages = len(pdf.pages)
-                st.info(f"총 {total_pages} 페이지 감지됨")
+            # PyMuPDF로 PDF 열기 (별도 외부 프로그램 불필요)
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            total_pages = len(doc)
+            st.info(f"총 {total_pages} 페이지 감지됨")
+            
+            for i in range(total_pages):
+                progress = (i + 1) / total_pages
+                progress_bar.progress(progress)
+                status_text.text(f"처리 중: {i+1} / {total_pages} 페이지")
                 
-                for i, page in enumerate(pdf.pages):
-                    progress = (i + 1) / total_pages
-                    progress_bar.progress(progress)
-                    status_text.text(f"처리 중: {i+1} / {total_pages} 페이지")
-                    
-                    markdown_text.append(f"\n\n## [Page {i+1}]\n\n")
-                    
-                    # 우선 텍스트 추출 시도
-                    text = page.extract_text()
-                    
-                    # 텍스트가 없거나 빈 페이지(스캔본 이미지)인 경우 -> OCR 엔진 가동
-                    if (not text or len(text.strip()) < 5) and OCR_AVAILABLE and images and i < len(images):
-                        status_text.text(f"처리 중 (이미지 OCR 판독): {i+1} / {total_pages} 페이지")
-                        try:
-                            # 한국어와 영어 동시 인식 설정 (kor + eng)
-                            text = pytesseract.image_to_string(images[i], lang='kor+eng')
-                        except Exception as ocr_err:
-                            text = f"[OCR 판독 중 오류 발생: {ocr_err}]"
-                    
-                    if text:
-                        markdown_text.append(text)
-                    
-                    # 표(Table) 구조 추출 (텍스트 PDF인 경우 정밀 표 유지)
-                    tables = page.extract_tables()
-                    if tables:
-                        for table in tables:
-                            markdown_text.append("\n\n")
-                            for row_idx, row in enumerate(table):
-                                cleaned_row = [str(cell).strip().replace('\n', ' ') if cell else "" for cell in row]
-                                markdown_text.append("| " + " | ".join(cleaned_row) + " |")
-                                if row_idx == 0:
-                                    markdown_text.append("| " + " | ".join(["---"] * len(row)) + " |")
-                            markdown_text.append("\n")
+                markdown_text.append(f"\n\n## [Page {i+1}]\n\n")
+                
+                page = doc[i]
+                # 1단계: 네이티브 텍스트 추출 시도
+                text = page.get_text("text")
+                
+                # 2단계: 텍스트가 거의 없거나 빈 페이지(스캔본)인 경우 PyMuPDF 자체 기능으로 이미지 추출 후 OCR 시도
+                if (not text or len(text.strip()) < 5) and OCR_AVAILABLE:
+                    status_text.text(f"처리 중 (이미지 OCR 판독): {i+1} / {total_pages} 페이지")
+                    try:
+                        pix = page.get_pixmap(dpi=150)
+                        img = Image.open(io.BytesIO(pix.tobytes("png")))
+                        text = pytesseract.image_to_string(img, lang='kor+eng')
+                    except Exception as ocr_err:
+                        text = f"[OCR 판독 오류: {ocr_err}]"
+                
+                if text:
+                    markdown_text.append(text)
+                else:
+                    markdown_text.append("[텍스트를 추출할 수 없는 페이지입니다.]")
             
             result_md = "".join(markdown_text)
             
